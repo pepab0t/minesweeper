@@ -1,9 +1,7 @@
+import os
 import random
 import sys
-from ast import Call
-from inspect import Attribute
 from typing import Any, Callable, Optional
-from xml.dom.minidom import Attr
 
 import pygame as pg
 
@@ -14,7 +12,7 @@ pg.init()
 
 roboto50 = pg.font.SysFont('Roboto', 50)
 roboto25 = pg.font.SysFont('Roboto', 25)
-roboto15 = pg.font.SysFont('Roboto', 15)
+roboto_cell = pg.font.SysFont('Roboto', const.CELL_SIZE[1])
 
 update: Callable[[], None] = lambda: pg.display.update()
 
@@ -50,20 +48,25 @@ class Cell:
     def __init__(self, x: int, y: int, width: int, height: int, idx: tuple[int, int]):
         self.i, self.j = idx
         self.cellRect: pg.Rect = pg.Rect(x, y, width, height)
-        self.cellArea: pg.Surface = pg.Surface((width, height))
-
-        self.discover_representation = None
-        """When cell is discovered self.discover_representation is overwritten"""
-        self.hidden_representation = const.appearence['hidden']
-        self.marked: bool = False
-
+        self.cellArea: pg.surface.Surface = pg.Surface((width, height))
+        self.cellArea = self.cellArea.convert()
         self.bomb: bool = True if random.random() < const.BOMB_CHANCE else False
+
+        self.background: const.rgb = const.appearence['hidden']
+        self.cellArea.fill(self.background)        
+
+        self.marked: bool = False
+        self.discovered: bool = False
+
 
         self.__bomb_hint: Optional[int] = 9 if self.bomb else None
         self.fontArea = None
         self.text_position = None
 
-        self.cellArea.fill(self.hidden_representation)        
+        self.markImage = pg.transform.scale(const.markImage, self.cellRect.size)
+
+        if self.bomb:
+            self.bombImage = pg.transform.scale(const.bombImage, self.cellRect.size)
 
         self.game_over: Signal = Signal()
 
@@ -95,46 +98,51 @@ class Cell:
         if not (0 <= value < 9):
             raise ValueError('New value must be in interval 0-8')
         self.__bomb_hint = value
-        self.fontArea = roboto25.render(str(self.bomb_hint) if self.bomb_hint else "", True, const.Colors.BLACK)
+        self.fontArea = roboto_cell.render(str(self.bomb_hint) if self.bomb_hint else "", True, const.Colors.BLACK)
         self.text_position = (self.width/2 - self.fontArea.get_width()/2, self.height/2 - self.fontArea.get_height()/2)
 
     def hover(self):
-        if self.discover_representation:
-            self.cellArea.fill(self.discover_representation)
+        if self.discovered:
+            self.cellArea.fill(self.background)
             if self.fontArea:
                 self.cellArea.blit(self.fontArea, self.text_position)  # type: ignore
-        elif self.marked:
-            self.cellArea.fill(self.hidden_representation)
         else:
             self.cellArea.fill(const.appearence['hover'])
+            if self.marked:
+                self.cellArea.blit(self.markImage, (0,0))
 
     def click(self) -> bool:
-        self.discover()
+        if not self.discovered:
+            self.discover()
         if self.bomb:
-            self.cellArea.fill(self.discover_representation)  # type: ignore
+            # self.cellArea.fill(self.background)  # type: ignore
+            # self.cellArea.blit(self.bombImage, self.bombImagePosition)
             self.game_over.emit()
             return False
         return True
 
     def mark(self):
-        if self.discover_representation:
+        if self.discovered:
             return
 
-        self.marked = True
-        self.hidden_representation = const.appearence['marked']
+        self.marked = not self.marked
 
     def neutral(self):
-        if not self.discover_representation:
-            self.cellArea.fill(self.hidden_representation)
-            return
+        self.cellArea.fill(self.background)
+        if self.discovered:
+            if self.bomb:
+                self.cellArea.blit(self.bombImage, (0,0))
+            elif self.fontArea:
+                self.cellArea.blit(self.fontArea, self.text_position)  # type: ignore
+        elif self.marked:
+            self.cellArea.blit(self.markImage, (0,0))
 
-        self.cellArea.fill(self.discover_representation)
-        if self.fontArea:
-            self.cellArea.blit(self.fontArea, self.text_position)  # type: ignore
 
     def discover(self):
-        self.discover_representation = const.appearence['bomb'] if self.bomb else const.appearence['discovered']
-        self.cellArea.fill(self.discover_representation)
+        self.discovered = True
+        self.background = const.appearence['discovered'] if not self.bomb else const.appearence['bomb']
+        self.neutral()
+
 
 class Button:
     def __init__(self, parent: pg.surface.Surface, x, y, width, height, text: str, click_fn: Optional[Callable[..., Any]] = None):
@@ -209,7 +217,10 @@ class Board:
 
         self.size: tuple[int, int] = const.BOARD_SIZE
 
-        self.game_over_surface: pg.surface.Surface = roboto50.render("Game Over!", True, const.Colors.RED)
+        self.lost_surface: pg.surface.Surface = roboto50.render("Game Over!", True, const.Colors.RED)
+        self.lost_surface_pos = (const.BOARD_DIM[0]/2 - self.lost_surface.get_width()/2, const.BOARD_DIM[1]/2 - self.lost_surface.get_height()/2)
+        self.win_surface = pg.surface.Surface = roboto50.render("You Won!", True, const.Colors.BLUE)
+        self.win_surface_pos = (const.BOARD_DIM[0]/2 - self.win_surface.get_width()/2, const.BOARD_DIM[1]/2 - self.win_surface.get_height()/2)
 
         self.reset()
 
@@ -229,18 +240,23 @@ class Board:
         for i in range(self.size[0]):
             for j in range(self.size[1]):
                 c = Cell(const.PADDING + j*(const.PADDING+cell_width), const.PADDING + i*(const.PADDING+cell_height), cell_width, cell_height, (i, j))
-                c.game_over.connect(self.end_game)
+                c.game_over.connect(self.lost)
                 self._board.blit(c.cellArea, (c.x, c.y))
                 self.cells.append(c)
 
-    def end_game(self):
-        print("Game over")
+    def win(self):
+        self.active = False
+        print("You won")
+        self.board.blit(self.win_surface, self.win_surface_pos)
+
+
+    def lost(self):
         self.active = False
         for c in self.cells:
             if c.bomb:
                 c.discover()
             self.board.blit(c.cellArea, (c.x, c.y))
-        self.board.blit(self.game_over_surface, (const.BOARD_DIM[0]/2 - self.game_over_surface.get_width()/2, const.BOARD_DIM[1]/2 - self.game_over_surface.get_height()/2))
+        self.board.blit(self.lost_surface, self.lost_surface_pos)
         update()
         
 
@@ -288,15 +304,17 @@ class Board:
     def is_in(self, mouse_pos: tuple[int, int]) -> bool:
         return self._board_rect.collidepoint(mouse_pos)
 
-    def compute(self, mouse_pos: tuple[int, int], click: Optional[ str ]):
+    def compute(self, mouse_pos: tuple[int, int], click: Optional[str]):
         offset = self.board.get_offset()
         mouse_pos = mouse_pos[0] - offset[0], mouse_pos[1] - offset[1]
+
+        all_discovered: bool = True
 
         for c in self.cells:
             if c.is_in(mouse_pos):
                 if click == 'left':
                     if not c.click(): # if bomb found
-                        # self.board.blit(c.cellArea, (c.x, c.y))
+                        all_discovered = False
                         break
                     if c.bomb_hint == 0:
                         self.discover_neighbours(self.find_neighbours(c.i, c.j))
@@ -307,12 +325,22 @@ class Board:
             else:
                 c.neutral()
 
+            # FOR TESTING
+            # if not c.bomb:
+            #     c.discover()
+
+            if not c.bomb and not c.discovered:
+                all_discovered = False
+
             self.board.blit(c.cellArea, (c.x, c.y))
+
+        if all_discovered:
+            self.win()
 
     def discover_neighbours(self, neighbours: list[tuple[int, int]]):
         for n in neighbours:
             cn = self[n]
-            if cn.discover_representation:
+            if cn.discovered:
                 continue
             if cn.bomb is False:
                 cn.discover()
@@ -328,17 +356,28 @@ class App:
         self.board = Board(self.screen)
         self.clock: pg.time.Clock = pg.time.Clock()
 
+        pg.time.set_timer(pg.USEREVENT, 1000)
+        self.seconds_counter: int = 0
+        self.timer_surface = roboto25.render(self.secs_repr(self.seconds_counter), True, const.Colors.BLACK)
+        self.timer_surface_position = (20, 50/2 - self.timer_surface.get_height()/2) 
+
         self.buttons: list[Button] = []
 
         self.buttons.append(Button(self.screen, self.screen.get_width() - 80 - 10, 10, 80, 30, 'Exit', click_fn=self.quit))
-        self.buttons.append(Button(self.screen, self.screen.get_width() - 2*(80 + 10), 10, 80, 30, 'Reset', click_fn=self.board.reset))
+        self.buttons.append(Button(self.screen, self.screen.get_width() - 2*(80 + 10), 10, 80, 30, 'Reset', click_fn=self.restart_game))
         
         update()
+    
+    def restart_game(self):
+        self.board.reset()
+        self.seconds_counter = 0
+
 
     def mainloop(self):
 
         while True:
             self.clock.tick(const.FPS)
+
 
             click: Optional[str] = None
 
@@ -349,9 +388,14 @@ class App:
                     self.quit()
                 if e.type == pg.MOUSEBUTTONDOWN:
                     click = CLICKS.get(e.button, None)
+                if e.type == pg.USEREVENT:
+                    self.seconds_counter += 1
 
             if self.board.active:
+                self.screen.fill(const.Colors.BACKGROUND)
                 self.board.compute(pos, click)
+                self.timer_surface = roboto25.render(self.secs_repr(self.seconds_counter), True, const.Colors.BLACK)
+                self.screen.blit(self.timer_surface, self.timer_surface_position)
             
             for b in self.buttons:
                 if b.collide(pos):
@@ -359,11 +403,18 @@ class App:
                 else:
                     b.neutral()
 
-            update()
+
+            pg.display.flip()
 
     def quit(self):
         pg.quit()
         sys.exit()
+
+    def secs_repr(self, seconds):
+        s = seconds%60
+        m = seconds//60
+
+        return f"{m:02d}:{s:02d}"
 
 
 def main():
