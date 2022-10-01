@@ -1,6 +1,9 @@
 import os
+from pathlib import Path
 
 import pygame as pg
+
+PATH: Path = Path(__file__).parent.resolve()
 
 rgb = tuple[int, int, int]
 
@@ -27,8 +30,8 @@ class Colors:
     GREY_2: rgb = (179, 179, 179)
     YELLOW: rgb = (255, 255, 0)
 
-markImage: pg.surface.Surface = pg.image.load(os.path.abspath( './img/flag.png' ))
-bombImage: pg.surface.Surface =  pg.image.load(os.path.abspath( './img/bomb.png' ))
+markImage: pg.surface.Surface = pg.image.load(os.path.abspath(f'{PATH}/img/flag.png' ))
+bombImage: pg.surface.Surface =  pg.image.load(os.path.abspath(f'{PATH}/img/bomb.png' ))
 
 appearence: dict[str, rgb] = {
     'hidden': Colors.GREEN_DARK,
